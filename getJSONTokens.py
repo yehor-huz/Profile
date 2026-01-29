@@ -3,6 +3,10 @@ import pandas as pd
 import math
 import json
 from collections import Counter, defaultdict
+from uk_stemmer import UkStemmer
+
+
+stemmer = UkStemmer()
 
 
 def cleanText(text):
@@ -11,21 +15,32 @@ def cleanText(text):
     text = re.sub(r"[\(\)\[\]\{\}<>]", " ", text)
     text = re.sub(r"[^\w\s\.\+#]", " ", text)
     text = re.sub(r"_", " ", text)
+    text = re.sub(r"[^\w\s]{2,}", " ", text)
+    text = re.sub(r"\b\w+['’`]\w+\b", " ", text)
+    text = re.sub(r"\b\w\.{1,}\b", " ", text)
+    text = re.sub(r"\b[a-zа-яіїє]\b", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip().lower()
+
     return text
 
 
 def tokenizeRow(text, corpus_words, stopwords):
     text = cleanText(text)
 
-    tokens = text.split()
-
     tokens = [
-        t for t in tokens
-        if t not in stopwords and t in corpus_words
+        t for t in text.split()
+        if t not in stopwords
     ]
 
-    return tokens
+    result = []
+
+    for t in tokens:
+        s = stemmer.stem_word(t)
+
+        if s in corpus_words:
+            result.append(s)
+
+    return result
 
 
 def build_tfidf(docs):
@@ -51,7 +66,8 @@ def build_tfidf(docs):
     idf = {}
 
     for w, d in df.items():
-        idf[w] = math.log(N / d) if d > 0 else 0
+        idf[w] = math.log((N + 1) / (d + 1)) + 1
+
 
     tfidf = []
 
@@ -67,7 +83,7 @@ def build_tfidf(docs):
 
 
 PATH_JSON = "C:\\University\\4_course\\ІнфоПлюс\\Profile\\tasks_output.json"
-PATH_STOPWORDS = "C:\\University\\4_course\\ІнфоПлюс\\Profile\\stopwords.txt"
+PATH_STOPWORDS = "C:\\University\\4_course\\ІнфоПлюс\\Profile\\stopwords_ua.txt"
 OUTPUT_JSON = "C:\\University\\4_course\\ІнфоПлюс\\Profile\\tasks_output_with_tokens.json"
 
 
@@ -83,33 +99,60 @@ corpus = " ".join(data["description"].dropna().astype(str))
 
 corpus = cleanText(corpus)
 
-corpus_words = set(corpus.split())
-corpus_words = {w for w in corpus_words if w not in stopwords}
+
+corpus_tokens = [
+    stemmer.stem_word(w)
+    for w in corpus.split()
+    if w not in stopwords
+]
+
+corpus_words = set(corpus_tokens)
 
 
 docs = []
 
 for text in data["description"].fillna(""):
-    tokens = tokenizeRow(text, corpus_words, stopwords)
-    docs.append(tokens)
+    docs.append(tokenizeRow(text, corpus_words, stopwords))
 
 
 tfidf_scores = build_tfidf(docs)
 
 
-THRESHOLD = 0.8
+global_scores = defaultdict(float)
+
+for doc in tfidf_scores:
+    for w, v in doc.items():
+        global_scores[w] += v
+
+sorted_words = sorted(
+    global_scores.items(),
+    key=lambda x: x[1],
+    reverse=True
+)
+
+PERCENT = 0.2
+cut_index = int(len(sorted_words) * PERCENT)
+
+top_words = set(w for w, _ in sorted_words[:cut_index])
+
+
+REMOVE_DUPLICATES = True
+
+def remove_duplicates(tokens):
+    return list(dict.fromkeys(tokens))
+
 filtered_docs = []
 
-for i in range(len(docs)):
-    new_tokens = set()
+for doc in docs:
+    new_tokens = [
+        w for w in doc
+        if w not in top_words
+    ]
 
-    for w in docs[i]:
-        score = tfidf_scores[i].get(w, 0)
+    if REMOVE_DUPLICATES:
+        new_tokens = remove_duplicates(new_tokens)
 
-        if score <= THRESHOLD:
-            new_tokens.add(w)
-
-    filtered_docs.append(list(new_tokens))
+    filtered_docs.append(new_tokens)
 
 
 data["tokens"] = filtered_docs
